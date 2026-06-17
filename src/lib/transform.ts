@@ -201,6 +201,7 @@ export function transformAll(respWb: XLSX.WorkBook, adminWb: XLSX.WorkBook, matr
   const a1Cargo = colIndex(a1.header, "cargo");
   const a1Sede = colIndex(a1.header, "sede");
   const a2Tipo = colIndex(a2.header, "tipo contrato");
+  const a2Cargo = colIndex(a2.header, "cargo");
   const a2Sede = colIndex(a2.header, "sede");
 
   type Persona = { ced: string; sede: string };
@@ -217,7 +218,9 @@ export function transformAll(respWb: XLSX.WorkBook, adminWb: XLSX.WorkBook, matr
     const ced = normCed(cell(row, 1));
     if (!ced) continue;
     const sede = sedeDesdeTexto(cell(row, a2Sede)) ?? "Fusagasugá";
-    const esDoc = txt(cell(row, a2Tipo)).toUpperCase().includes("ACADEMICO");
+    // OPS/APA: si el contrato o el cargo dice algo académico/docente -> docente; si no -> administrativo
+    const marca = (txt(cell(row, a2Tipo)) + " " + (a2Cargo >= 0 ? txt(cell(row, a2Cargo)) : "")).toUpperCase();
+    const esDoc = marca.includes("ACADEMICO") || marca.includes("ACADÉMICO") || marca.includes("DOCENTE");
     (esDoc ? docentes : admins).push({ ced, sede });
   }
   // dedup por cédula; docente tiene prioridad

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "generar": "tsc src/lib/transform.ts --rootDir src/lib --outDir tools/_build --module commonjs --target es2019 --esModuleInterop --skipLibCheck --moduleResolution node && node tools/run-cli.cjs"
   },
   "dependencies": {
     "next": "14.2.35",
