@@ -42,6 +42,11 @@ const PREGUNTAS_CLAVE = [
   "transmoderna y translocal",
 ];
 
+// Etiquetas canónicas de "Tipo de Participante" (idénticas a las de la encuesta).
+const TIPO_DOCENTE = "Gestor del Conocimiento y el Aprendizaje";
+const TIPO_ADMIN = "Administrativo";
+const TIPO_ESTUDIANTE = "Creador de Oportunidades";
+
 // ----------------------------------------------------------------- utilidades
 export function readWorkbook(buf: ArrayBuffer): XLSX.WorkBook {
   return XLSX.read(buf, { type: "array", cellDates: true });
@@ -176,26 +181,13 @@ export function transformAll(respWb: XLSX.WorkBook, adminWb: XLSX.WorkBook, matr
   });
   const largoSheet: SheetOut = { name: "Respuestas Normalizadas", header: ["ID", "Pregunta", "Respuesta"], rows: largoRows };
   const archivoLargo: OutputFile = { filename: "2. Respuestas formato largo (ID-Pregunta-Respuesta).xlsx", sheets: [largoSheet] };
-  const archivoNormalizado: OutputFile = { filename: "Diagnostico_CAI_Respondieron_Normalizado.xlsx", sheets: [largoSheet] };
+  // (Diagnostico_CAI_Respondieron_Normalizado se arma más abajo, ya filtrado a la
+  //  misma población que NORMALIZADA, para que ambos archivos sean coherentes.)
 
-  // ---------- (3) NORMALIZADA ----------
-  const sedeCols = colIndexes(H, "sede de la universidad");
-  const progCols = colIndexes(H, "programa al que pertenece");
-  const areaCol = colIndex(H, "rea a que pertenece");
-  const tipoCol = colIndex(H, "tipo de participante");
-  const progAreaCols = areaCol >= 0 ? [...progCols, areaCol] : progCols;
-  const normRows = keptRows.map((row, i) => [
-    i + 1,
-    canonSede(primeraNoNula(row, sedeCols)),
-    tipoCol >= 0 ? txt(cell(row, tipoCol)) : null,
-    primeraNoNula(row, progAreaCols),
-  ]);
-  const archivoNormalizada: OutputFile = {
-    filename: "Diagnostico_CAI_Respondieron_NORMALIZADA.xlsx",
-    sheets: [{ name: "Hoja1", header: ["ID", "Unidad Regional", "Tipo de Participante", "Programa o Área"], rows: normRows }],
-  };
-
-  // ---------- (5) Población vs Participación ----------
+  // ---------- BD: docentes / administrativos / estudiantes (fuente de verdad) ----------
+  // El "Tipo de Participante" se toma de la BD por cédula, NO de lo declarado en la
+  // encuesta: muchas personas se autoclasifican mal (p. ej. estudiantes que marcan
+  // "Gestor del Conocimiento"). Así NORMALIZADA cuadra con el reporte de población.
   const a1 = sheetToMatrix(adminWb, findSheet(adminWb, "ADM") ?? adminWb.SheetNames[0]);
   const a2 = sheetToMatrix(adminWb, findSheet(adminWb, "OPS") ?? adminWb.SheetNames[1]);
   const a1Cargo = colIndex(a1.header, "cargo");
@@ -245,6 +237,54 @@ export function transformAll(respWb: XLSX.WorkBook, adminWb: XLSX.WorkBook, matr
   }
   const matArr = [...matMap.values()];
 
+  // Clasificación por cédula contra la BD. Prioridad: docente > administrativo >
+  // estudiante. Si la cédula no está en ninguna BD se conserva lo declarado (solo
+  // aplica a graduados, que no están en personal ni matriculados → quedan "Graduado").
+  const tipoDesdeBD = (ced: string, declarado: string): string => {
+    if (docMap.has(ced)) return TIPO_DOCENTE;
+    if (admMap.has(ced)) return TIPO_ADMIN;
+    if (matMap.has(ced)) return TIPO_ESTUDIANTE;
+    return declarado;
+  };
+  const enBD = (ced: string): boolean => docMap.has(ced) || admMap.has(ced) || matMap.has(ced);
+  const esGraduado = (declarado: string): boolean => declarado.toLowerCase().includes("graduado");
+
+  // ---------- (3) NORMALIZADA (tipo según BD; sede/programa según encuesta) ----------
+  // Se incluye a quien esté en la BD (docente/admin/estudiante) o que se haya
+  // declarado graduado (no hay BD de graduados). A quien dijo ser personal/estudiante
+  // pero NO aparece en ninguna BD se le EXCLUYE del archivo. El ID se mantiene estable
+  // (i+1 sobre las respuestas únicas) para que NORMALIZADA siga cruzando por ID con los
+  // demás archivos; por eso pueden quedar huecos en la numeración.
+  const sedeCols = colIndexes(H, "sede de la universidad");
+  const progCols = colIndexes(H, "programa al que pertenece");
+  const areaCol = colIndex(H, "rea a que pertenece");
+  const tipoCol = colIndex(H, "tipo de participante");
+  const progAreaCols = areaCol >= 0 ? [...progCols, areaCol] : progCols;
+  const normRows = keptRows
+    .map((row, i) => ({
+      id: i + 1,
+      ced: keptKeys[i],
+      sede: canonSede(primeraNoNula(row, sedeCols)),
+      declarado: tipoCol >= 0 ? txt(cell(row, tipoCol)) : "",
+      prog: primeraNoNula(row, progAreaCols),
+    }))
+    .filter((r) => enBD(r.ced) || esGraduado(r.declarado))
+    .map((r) => [r.id, r.sede, tipoDesdeBD(r.ced, r.declarado), r.prog]);
+  const archivoNormalizada: OutputFile = {
+    filename: "Diagnostico_CAI_Respondieron_NORMALIZADA.xlsx",
+    sheets: [{ name: "Hoja1", header: ["ID", "Unidad Regional", "Tipo de Participante", "Programa o Área"], rows: normRows }],
+  };
+
+  // ---------- (4) Normalizado (formato largo, MISMA población que NORMALIZADA) ----------
+  // Mismas reglas de inclusión: solo IDs que quedaron en NORMALIZADA (BD + graduados).
+  const idsIncluidos = new Set(normRows.map((r) => r[0] as number));
+  const largoRowsNorm = largoRows.filter((r) => idsIncluidos.has(r[0] as number));
+  const archivoNormalizado: OutputFile = {
+    filename: "Diagnostico_CAI_Respondieron_Normalizado.xlsx",
+    sheets: [{ name: "Respuestas Normalizadas", header: ["ID", "Pregunta", "Respuesta"], rows: largoRowsNorm }],
+  };
+
+  // ---------- (5) Población vs Participación ----------
   // helpers de agregación
   type Fila = [string, number, number, number];
   function tabla(items: { ced: string }[], grupoDe: (x: never) => string, etiqueta: string): SheetOut {
